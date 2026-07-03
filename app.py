@@ -1,4 +1,3 @@
-import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from reportlab.lib.pagesizes import letter
@@ -10,6 +9,7 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER
 import smtplib
 import ssl
 import traceback
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -21,18 +21,19 @@ CORS(app, origins=["http://localhost:3000",
      "http://localhost:3001", "https://racecitytrucksolutions.com",
      "https://www.racecitytrucksolutions.com"])
 
-if not EMAIL_USER or not EMAIL_PASSWORD:
-    print("WARNING: EMAIL_USER or EMAIL_PASSWORD environment variables are not set. "
-          "Email sending will fail until these are configured.")
-
 # ── Email Configuration ──────────────────────────────────────────
 # Pulled from environment variables — set these in Render's dashboard
 # under Environment. Never hardcode credentials in source code.
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.hostinger.com")
+EMAIL_HOST = os.environ.get("EMAIL_HOST",     "smtp.hostinger.com")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", 465))
-EMAIL_USER = os.environ.get("EMAIL_USER")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_TO = os.environ.get("EMAIL_TO", "info@racecitytrucksolutions.com")
+EMAIL_USER = os.environ.get("EMAIL_USER",     "")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+EMAIL_TO = os.environ.get("EMAIL_TO",       "info@racecitytrucksolutions.com")
+
+if not EMAIL_USER or not EMAIL_PASSWORD:
+    print("WARNING: EMAIL_USER or EMAIL_PASSWORD environment variables are not set.")
+else:
+    print("Email configured for:", EMAIL_USER)
 # ────────────────────────────────────────────────────────────────
 
 ACCENT_COLOR = HexColor("#29c4f2")
@@ -134,7 +135,7 @@ def generate_pdf(data):
     service_str = ", ".join(services) if services else "N/A"
 
     service_data = [
-        ["Number of Trucks",   data.get("truckCount",    "N/A") or "N/A"],
+        ["Number of Trucks",   data.get("truckCount", "N/A") or "N/A"],
         ["Services Requested", service_str],
     ]
     service_table = Table(
@@ -219,7 +220,7 @@ def send_email(data, pdf_buffer):
                     <td style="padding:10px 14px; font-weight:bold;">Trucks</td>
                     <td style="padding:10px 14px;">{truck_count}</td>
                 </tr>
-                <tr>
+                <tr style="background:#f5f5f5;">
                     <td style="padding:10px 14px; font-weight:bold;">Notes</td>
                     <td style="padding:10px 14px;">{notes}</td>
                 </tr>
@@ -233,14 +234,13 @@ def send_email(data, pdf_buffer):
     </body>
     </html>
     """.format(
-        name=data.get("name",          "N/A"),
-        company=data.get("company",       "N/A") or "N/A",
-        phone=data.get("phone",         "N/A"),
-        email=data.get("email",         "N/A"),
+        name=data.get("name",      "N/A"),
+        company=data.get("company",   "N/A") or "N/A",
+        phone=data.get("phone",     "N/A"),
+        email=data.get("email",     "N/A"),
         services=", ".join(data.get("services", [])) or "N/A",
-        truck_count=data.get("truckCount",    "N/A") or "N/A",
-        preferred_date=data.get("preferredDate", "N/A") or "N/A",
-        notes=data.get("notes",         "None provided") or "None provided",
+        truck_count=data.get("truckCount", "N/A") or "N/A",
+        notes=data.get("notes",     "None provided") or "None provided",
     )
 
     msg.attach(MIMEText(body, "html"))
@@ -279,6 +279,10 @@ def service_request():
             print("ERROR: No data received")
             return jsonify({"error": "No data received"}), 400
 
+        if not EMAIL_USER or not EMAIL_PASSWORD:
+            print("ERROR: Email credentials not configured")
+            return jsonify({"error": "Email not configured on server"}), 500
+
         required = ["name", "email", "phone", "services"]
         for field in required:
             if not data.get(field):
@@ -299,11 +303,11 @@ def service_request():
 
     except smtplib.SMTPAuthenticationError as e:
         print("SMTP AUTH ERROR:", str(e))
-        return jsonify({"error": "Email authentication failed. Check username and password."}), 500
+        return jsonify({"error": "Email authentication failed."}), 500
 
     except smtplib.SMTPConnectError as e:
         print("SMTP CONNECT ERROR:", str(e))
-        return jsonify({"error": "Could not connect to email server. Check EMAIL_HOST and EMAIL_PORT."}), 500
+        return jsonify({"error": "Could not connect to email server."}), 500
 
     except smtplib.SMTPException as e:
         print("SMTP ERROR:", str(e))
@@ -317,11 +321,12 @@ def service_request():
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()}), 200
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "email_configured": bool(EMAIL_USER and EMAIL_PASSWORD)
+    }), 200
 
 
 if __name__ == "__main__":
-    # For local development only. In production, Render runs this via
-    # gunicorn (see Procfile), so this block doesn't execute there.
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)
