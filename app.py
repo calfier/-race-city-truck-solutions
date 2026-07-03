@@ -29,7 +29,9 @@ EMAIL_TO = os.environ.get("EMAIL_TO",       "info@racecitytrucksolutions.com")
 if not RESEND_API_KEY:
     print("WARNING: RESEND_API_KEY environment variable is not set.")
 else:
-    print("Email configured, sending as:", EMAIL_FROM)
+    _key_len = len(RESEND_API_KEY)
+    _key_preview = RESEND_API_KEY[:5] + "..." + RESEND_API_KEY[-3:] if _key_len > 10 else "(too short)"
+    print(f"Email configured, sending as: {EMAIL_FROM} | key length={_key_len} preview={_key_preview}")
 # ────────────────────────────────────────────────────────────────
 
 ACCENT_COLOR = HexColor("#29c4f2")
