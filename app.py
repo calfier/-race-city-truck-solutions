@@ -7,6 +7,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 import smtplib
+import socket
 import ssl
 import traceback
 import os
@@ -257,11 +258,11 @@ def send_email(data, pdf_buffer):
 
     if EMAIL_PORT == 465:
         context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT, context=context) as server:
+        with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT, context=context, timeout=15) as server:
             server.login(EMAIL_USER, EMAIL_PASSWORD)
             server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
     else:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=15) as server:
             server.ehlo()
             server.starttls()
             server.login(EMAIL_USER, EMAIL_PASSWORD)
@@ -310,6 +311,10 @@ def service_request():
     except smtplib.SMTPConnectError as e:
         print("SMTP CONNECT ERROR:", str(e))
         return jsonify({"error": "Could not connect to email server."}), 500
+
+    except (socket.timeout, TimeoutError) as e:
+        print("SMTP TIMEOUT:", str(e))
+        return jsonify({"error": "Timed out connecting to email server. Please try again shortly."}), 504
 
     except smtplib.SMTPException as e:
         print("SMTP ERROR:", str(e))
