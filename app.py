@@ -6,14 +6,10 @@ from reportlab.lib.colors import HexColor, white
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-import smtplib
-import socket
-import ssl
+import base64
+import requests
 import traceback
 import os
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 import io
 from datetime import datetime
 
@@ -23,20 +19,17 @@ CORS(app, origins=["http://localhost:3000",
                    "https://www.racecitytrucksolutions.com"])
 
 # ── Email Configuration ──────────────────────────────────────────
-# Pulled from environment variables — set these in Render's dashboard
-# under Environment. Never hardcode credentials in source code.
-EMAIL_HOST = os.environ.get("EMAIL_HOST",     "smtp.hostinger.com")
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", 465))
-EMAIL_USER = os.environ.get("EMAIL_USER",     "")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+# Sent via the Resend HTTP API (not SMTP) — Render's outbound network
+# doesn't reliably reach SMTP ports, but HTTPS always works. Set
+# RESEND_API_KEY in Render's dashboard under Environment.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "Race City Truck Solutions <info@racecitytrucksolutions.com>")
 EMAIL_TO = os.environ.get("EMAIL_TO",       "info@racecitytrucksolutions.com")
 
-print("DEBUG: env keys containing EMAIL:", [repr(k) for k in os.environ if "EMAIL" in k.upper()])
-
-if not EMAIL_USER or not EMAIL_PASSWORD:
-    print("WARNING: EMAIL_USER or EMAIL_PASSWORD environment variables are not set.")
+if not RESEND_API_KEY:
+    print("WARNING: RESEND_API_KEY environment variable is not set.")
 else:
-    print("Email configured for:", EMAIL_USER)
+    print("Email configured, sending as:", EMAIL_FROM)
 # ────────────────────────────────────────────────────────────────
 
 ACCENT_COLOR = HexColor("#29c4f2")
@@ -184,11 +177,6 @@ def generate_pdf(data):
 
 
 def send_email(data, pdf_buffer):
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = "New Service Request - " + data.get("name", "Unknown")
-
     body = """
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0;">
@@ -246,27 +234,33 @@ def send_email(data, pdf_buffer):
         notes=data.get("notes",     "None provided") or "None provided",
     )
 
-    msg.attach(MIMEText(body, "html"))
-
     pdf_bytes = pdf_buffer.read()
-    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
     filename = "Race-City-Service-Request-" + \
         data.get("name", "Request").replace(" ", "-") + ".pdf"
-    attachment.add_header("Content-Disposition",
-                          "attachment", filename=filename)
-    msg.attach(attachment)
 
-    if EMAIL_PORT == 465:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT, context=context, timeout=15) as server:
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
-    else:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
+    payload = {
+        "from": EMAIL_FROM,
+        "to": [EMAIL_TO],
+        "subject": "New Service Request - " + data.get("name", "Unknown"),
+        "html": body,
+        "attachments": [
+            {
+                "filename": filename,
+                "content": base64.b64encode(pdf_bytes).decode("utf-8"),
+            }
+        ],
+    }
+
+    resp = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": "Bearer " + RESEND_API_KEY,
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=15,
+    )
+    resp.raise_for_status()
 
 
 # ── Routes ───────────────────────────────────────────────────────
@@ -282,8 +276,8 @@ def service_request():
             print("ERROR: No data received")
             return jsonify({"error": "No data received"}), 400
 
-        if not EMAIL_USER or not EMAIL_PASSWORD:
-            print("ERROR: Email credentials not configured")
+        if not RESEND_API_KEY:
+            print("ERROR: Email not configured")
             return jsonify({"error": "Email not configured on server"}), 500
 
         required = ["name", "email", "phone", "services"]
@@ -296,29 +290,23 @@ def service_request():
         pdf_buffer = generate_pdf(data)
         print("PDF generated successfully")
 
-        print("Sending email to:", EMAIL_TO)
-        print("Using SMTP host:", EMAIL_HOST, "port:", EMAIL_PORT)
-        print("Logging in as:", EMAIL_USER)
+        print("Sending email to:", EMAIL_TO, "via Resend")
         send_email(data, pdf_buffer)
         print("Email sent successfully!")
 
         return jsonify({"success": True, "message": "Service request sent successfully"}), 200
 
-    except smtplib.SMTPAuthenticationError as e:
-        print("SMTP AUTH ERROR:", str(e))
-        return jsonify({"error": "Email authentication failed."}), 500
+    except requests.exceptions.Timeout as e:
+        print("RESEND TIMEOUT:", str(e))
+        return jsonify({"error": "Timed out sending email. Please try again shortly."}), 504
 
-    except smtplib.SMTPConnectError as e:
-        print("SMTP CONNECT ERROR:", str(e))
-        return jsonify({"error": "Could not connect to email server."}), 500
+    except requests.exceptions.HTTPError as e:
+        print("RESEND HTTP ERROR:", str(e), getattr(e.response, "text", ""))
+        return jsonify({"error": "Email sending failed."}), 500
 
-    except (socket.timeout, TimeoutError) as e:
-        print("SMTP TIMEOUT:", str(e))
-        return jsonify({"error": "Timed out connecting to email server. Please try again shortly."}), 504
-
-    except smtplib.SMTPException as e:
-        print("SMTP ERROR:", str(e))
-        return jsonify({"error": "Email sending failed: " + str(e)}), 500
+    except requests.exceptions.RequestException as e:
+        print("RESEND REQUEST ERROR:", str(e))
+        return jsonify({"error": "Could not reach email service."}), 500
 
     except Exception as e:
         print("UNEXPECTED ERROR:", str(e))
@@ -331,7 +319,7 @@ def health():
     return jsonify({
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "email_configured": bool(EMAIL_USER and EMAIL_PASSWORD)
+        "email_configured": bool(RESEND_API_KEY)
     }), 200
 
 
