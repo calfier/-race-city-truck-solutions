@@ -19,7 +19,7 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000",
      "http://localhost:3001", "https://racecitytrucksolutions.com",
-     "https://www.racecitytrucksolutions.com"])
+                   "https://www.racecitytrucksolutions.com"])
 
 # ── Email Configuration ──────────────────────────────────────────
 # Pulled from environment variables — set these in Render's dashboard
@@ -29,6 +29,8 @@ EMAIL_PORT = int(os.environ.get("EMAIL_PORT", 465))
 EMAIL_USER = os.environ.get("EMAIL_USER",     "")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO = os.environ.get("EMAIL_TO",       "info@racecitytrucksolutions.com")
+
+print("DEBUG: env keys containing EMAIL:", [repr(k) for k in os.environ if "EMAIL" in k.upper()])
 
 if not EMAIL_USER or not EMAIL_PASSWORD:
     print("WARNING: EMAIL_USER or EMAIL_PASSWORD environment variables are not set.")
